@@ -43,6 +43,10 @@ body {
   pointer-events: none;
 }
 
+.menu-toggle {
+  display: none;
+}
+
 .effects-panel {
   position: absolute;
   z-index: 2;
@@ -87,9 +91,36 @@ body {
 }
 
 @media (max-width: 520px) {
-  .effects-panel {
+  .menu-toggle {
+    position: absolute;
+    z-index: 3;
     top: 12px;
     right: 12px;
+    display: block;
+    padding: 9px 12px;
+    border: 1px solid rgb(255 255 255 / 18%);
+    border-radius: 999px;
+    background: rgb(12 12 14 / 82%);
+    color: #f4f4f5;
+    font: inherit;
+    font-size: 12px;
+    backdrop-filter: blur(16px);
+  }
+
+  .effects-panel {
+    top: 58px;
+    right: 12px;
     padding: 12px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-8px) scale(0.98);
+    transform-origin: top right;
+    transition: opacity 160ms ease, transform 160ms ease;
+  }
+
+  .stage.menu-open .effects-panel {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
   }
 }

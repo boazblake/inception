@@ -23,6 +23,7 @@ type TouchState = {
   vy: number;
   active: boolean;
   strength: number;
+  depthStrength: number;
 };
 
 type WarpGridField = {
@@ -48,7 +49,9 @@ const screenTouch: TouchState = {
   vy: 0,
   active: false,
   strength: 0,
+  depthStrength: 0,
 };
+let trackingInitialized = false;
 
 const effectSettings = {
   pose: true,
@@ -66,6 +69,14 @@ effectInputs.forEach((input) => {
   input.addEventListener("change", () => {
     effectSettings[effect] = input.checked;
   });
+});
+
+const stage = document.querySelector<HTMLElement>(".stage");
+const menuToggle = document.querySelector<HTMLButtonElement>(".menu-toggle");
+menuToggle?.addEventListener("click", () => {
+  if (stage === null || menuToggle === null) return;
+  const open = stage.classList.toggle("menu-open");
+  menuToggle.setAttribute("aria-expanded", String(open));
 });
 
 const createWarpGridField = (cols: number, rows: number): WarpGridField => ({
@@ -294,15 +305,32 @@ const createWebGLWarp = (): WebGLWarp => {
     previousFrameTime = timestamp;
     if (indexTip === undefined) {
       screenTouch.active = false;
+      screenTouch.depthStrength = 0;
       screenTouch.targetX = -1e5;
       screenTouch.targetY = -1e5;
+      trackingInitialized = false;
     } else {
+      const targetX = indexTip.x;
+      const targetY = 1 - indexTip.y;
+      const depth = Math.min(1, Math.max(0, (0.15 - (indexTip.z ?? 0)) / 0.35));
+      screenTouch.depthStrength = 0.35 + depth * 1.65;
       screenTouch.active = true;
-      screenTouch.targetX = indexTip.x;
-      screenTouch.targetY = 1 - indexTip.y;
+      screenTouch.targetX = targetX;
+      screenTouch.targetY = targetY;
+      if (!trackingInitialized) {
+        screenTouch.x = targetX;
+        screenTouch.y = targetY;
+        screenTouch.vx = 0;
+        screenTouch.vy = 0;
+        for (let index = 0; index < dropletPositions.length; index += 2) {
+          dropletPositions[index] = targetX;
+          dropletPositions[index + 1] = targetY;
+        }
+        trackingInitialized = true;
+      }
     }
     const spring = 14;
-    const targetStrength = screenTouch.active ? 1 : 0;
+    const targetStrength = screenTouch.active ? screenTouch.depthStrength : 0;
     const strengthRate = screenTouch.active ? 8 : 2.5;
     screenTouch.strength += (targetStrength - screenTouch.strength) * Math.min(frameDelta * strengthRate, 1);
     screenTouch.vx += ((screenTouch.targetX - screenTouch.x) * spring * spring - 2 * spring * screenTouch.vx) * frameDelta;
@@ -332,7 +360,7 @@ const createWebGLWarp = (): WebGLWarp => {
       const previous = previousTips[index];
       const speed = previous === undefined ? 0 : Math.hypot(tip.x - previous.x, tip.y - previous.y);
       const active = isTouchingScreen(tip);
-      const target = active ? Math.min(1, speed * 55) : 0;
+      const target = active ? Math.min(1, speed * 55) * screenTouch.depthStrength : 0;
       warpStrengths[index] = warpStrengths[index] * 0.86 + target * 0.14;
       tipData[index * 2] = tip.x;
       tipData[index * 2 + 1] = 1 - tip.y;
@@ -359,8 +387,8 @@ const createWebGLWarp = (): WebGLWarp => {
         grid,
         screenTouch.x * canvasWidth,
         screenTouch.y * canvasHeight,
-        screenTouch.vx * canvasWidth,
-        screenTouch.vy * canvasHeight,
+        screenTouch.vx * canvasWidth * screenTouch.depthStrength,
+        screenTouch.vy * canvasHeight * screenTouch.depthStrength,
         canvasWidth,
         canvasHeight,
       );

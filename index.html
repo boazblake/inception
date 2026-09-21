@@ -9,7 +9,8 @@
     <main class="stage">
       <video id="video" autoplay muted playsinline></video>
       <canvas id="warp-canvas" aria-label="Warped camera canvas"></canvas>
-      <aside class="effects-panel" aria-label="Touch effects">
+      <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="effects-panel">Effects</button>
+      <aside id="effects-panel" class="effects-panel" aria-label="Touch effects">
         <p class="effects-panel__eyebrow">Touch effects</p>
         <h1>Mix the field</h1>
         <label><input type="checkbox" data-effect="pose" checked /> Pose distortion</label>
