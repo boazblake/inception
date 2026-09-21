@@ -38,4 +38,12 @@ body {
 }
 
 #video { visibility: hidden; }
-#warp-canvas { z-index: 1; }
+#warp-canvas {
+  z-index: 1;
+  touch-action: none;
+  cursor: grab;
+}
+
+#warp-canvas:active {
+  cursor: grabbing;
+}
