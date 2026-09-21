@@ -35,9 +35,8 @@ type WarpGridField = {
   readonly pixels: Uint8Array;
 };
 
-type WebGLWarp = (tips: readonly Point[], timestamp: number) => void;
+type WebGLWarp = (tips: readonly Point[], indexTip: Point | undefined, timestamp: number) => void;
 
-const fingertipIndices = [4, 8, 12, 16, 20] as const;
 const previousTips: Point[] = [];
 const warpStrengths = new Float32Array(10);
 const screenTouch: TouchState = {
@@ -50,13 +49,24 @@ const screenTouch: TouchState = {
   active: false,
   strength: 0,
 };
+
+const effectSettings = {
+  pose: true,
+  cloth: true,
+  grid: true,
+  droplet: false,
+};
+const dropletPositions = new Float32Array(16).fill(-1e5);
 let previousFrameTime = 0;
 
-const collectFingertips = (hands: readonly (readonly Point[])[]): readonly Point[] =>
-  hands.flatMap((hand) => fingertipIndices.flatMap((index) => {
-    const tip = hand[index];
-    return tip === undefined ? [] : [tip];
-  }));
+const effectInputs = document.querySelectorAll<HTMLInputElement>("[data-effect]");
+effectInputs.forEach((input) => {
+  const effect = input.dataset.effect as keyof typeof effectSettings | undefined;
+  if (effect === undefined) return;
+  input.addEventListener("change", () => {
+    effectSettings[effect] = input.checked;
+  });
+});
 
 const createWarpGridField = (cols: number, rows: number): WarpGridField => ({
   cols,
@@ -154,6 +164,14 @@ const createWebGLWarp = (): WebGLWarp => {
     uniform float gridLines;
     uniform vec3 gridColor;
     uniform vec2 tips[10];
+    uniform vec2 droplets[8];
+    uniform float dropletRadii[8];
+    uniform int dropletCount;
+    uniform float dropletStrength;
+    uniform float enablePose;
+    uniform float enableCloth;
+    uniform float enableGrid;
+    uniform float enableDroplet;
     uniform float strengths[10];
     uniform int tipCount;
     uniform vec2 clothTouch;
@@ -165,9 +183,19 @@ const createWebGLWarp = (): WebGLWarp => {
       return texture2D(camera, vec2(point.x, 1.0 - point.y)).rgb;
     }
 
+    float dropletField(vec2 point) {
+      float field = 0.0;
+      for (int i = 0; i < 8; i += 1) {
+        if (i >= dropletCount) break;
+        vec2 delta = point - droplets[i];
+        field += (dropletRadii[i] * dropletRadii[i]) / max(dot(delta, delta), 0.0001);
+      }
+      return field;
+    }
+
     void main() {
       vec2 warped = uv;
-      vec2 gridOffset = (texture2D(warpField, uv).rg - 0.5) * 2.0 * gridMaxShift;
+      vec2 gridOffset = (texture2D(warpField, uv).rg - 0.5) * 2.0 * gridMaxShift * enableGrid;
       float gridShear = length(gridOffset) / max(gridMaxShift, 0.001);
       warped -= gridOffset / resolution;
       float total = gridShear;
@@ -175,7 +203,7 @@ const createWebGLWarp = (): WebGLWarp => {
         if (i >= tipCount) break;
         vec2 delta = warped - tips[i];
         float distanceFromTip = length(delta);
-        float influence = exp(-distanceFromTip * distanceFromTip / 0.018) * strengths[i];
+        float influence = exp(-distanceFromTip * distanceFromTip / 0.018) * strengths[i] * enablePose;
         vec2 radial = distanceFromTip > 0.001 ? normalize(delta) : vec2(0.0);
         vec2 swirl = vec2(-delta.y, delta.x);
         warped += (radial * 0.045 + swirl * 0.22) * influence;
@@ -186,22 +214,31 @@ const createWebGLWarp = (): WebGLWarp => {
       // with spring-like lag and leaves a wider, directional wake in the image.
       vec2 clothDelta = warped - clothTouch;
       float clothDistance = dot(clothDelta, clothDelta);
-      float clothInfluence = exp(-clothDistance / 0.055) * clothStrength;
+      float clothInfluence = exp(-clothDistance / 0.055) * clothStrength * enableCloth;
       vec2 clothRadial = clothDistance > 0.0001 ? normalize(clothDelta) : vec2(0.0);
       vec2 clothSwirl = vec2(-clothDelta.y, clothDelta.x);
       warped += (clothRadial * 0.075 + clothSwirl * 0.3 + clothVelocity * 0.018) * clothInfluence;
       total += clothInfluence;
 
+      float dropletValue = dropletField(warped) * dropletStrength * enableDroplet;
+      float dropletEdge = smoothstep(0.78, 1.12, dropletValue);
+      float dropletX = (dropletField(warped + vec2(0.003, 0.0)) - dropletField(warped - vec2(0.003, 0.0))) / 0.006;
+      float dropletY = (dropletField(warped + vec2(0.0, 0.003)) - dropletField(warped - vec2(0.0, 0.003))) / 0.006;
+      vec2 dropletNormal = normalize(vec2(-dropletX, -dropletY) + vec2(0.0001));
+      warped -= dropletNormal * 0.025 * dropletEdge;
+
       // Split the colour channels only where pixels are actually moving.
       vec2 aberration = vec2(0.006 * total, 0.0);
-      float red = sampleCamera(warped + aberration).r;
+      vec2 dropletAberration = dropletNormal * 0.008 * dropletEdge;
+      float red = sampleCamera(warped + aberration + dropletAberration).r;
       float green = sampleCamera(warped).g;
-      float blue = sampleCamera(warped - aberration).b;
+      float blue = sampleCamera(warped - aberration - dropletAberration).b;
+      float dropletHighlight = pow(max(dot(normalize(vec3(dropletNormal, 0.7)), normalize(vec3(-0.45, -0.65, 0.6))), 0.0), 24.0) * dropletEdge * 0.35;
       vec2 cellPosition = fract(warped * gridSize);
       vec2 cellSize = 1.0 / gridSize;
       vec2 lineDistance = min(cellPosition, 1.0 - cellPosition) * cellSize;
       float lineMask = 1.0 - smoothstep(0.0, 0.002, min(lineDistance.x, lineDistance.y));
-      vec3 color = vec3(red, green, blue);
+      vec3 color = vec3(red, green, blue) + dropletHighlight;
       color = mix(color, gridColor, lineMask * gridLines);
       gl_FragColor = vec4(color, 1.0);
     }
@@ -234,6 +271,14 @@ const createWebGLWarp = (): WebGLWarp => {
   const gridMaxShiftUniform = gl.getUniformLocation(program, "gridMaxShift");
   const gridLines = gl.getUniformLocation(program, "gridLines");
   const gridColor = gl.getUniformLocation(program, "gridColor");
+  const droplets = gl.getUniformLocation(program, "droplets");
+  const dropletRadii = gl.getUniformLocation(program, "dropletRadii");
+  const dropletCount = gl.getUniformLocation(program, "dropletCount");
+  const dropletStrength = gl.getUniformLocation(program, "dropletStrength");
+  const enablePose = gl.getUniformLocation(program, "enablePose");
+  const enableCloth = gl.getUniformLocation(program, "enableCloth");
+  const enableGrid = gl.getUniformLocation(program, "enableGrid");
+  const enableDroplet = gl.getUniformLocation(program, "enableDroplet");
   const tips = gl.getUniformLocation(program, "tips");
   const strengths = gl.getUniformLocation(program, "strengths");
   const tipCount = gl.getUniformLocation(program, "tipCount");
@@ -244,9 +289,18 @@ const createWebGLWarp = (): WebGLWarp => {
   gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
   gl.uniform1i(camera, 0);
 
-  return (currentTips, timestamp) => {
+  return (currentTips, indexTip, timestamp) => {
     const frameDelta = previousFrameTime === 0 ? 1 / 60 : Math.min((timestamp - previousFrameTime) / 1000, 1 / 20);
     previousFrameTime = timestamp;
+    if (indexTip === undefined) {
+      screenTouch.active = false;
+      screenTouch.targetX = -1e5;
+      screenTouch.targetY = -1e5;
+    } else {
+      screenTouch.active = true;
+      screenTouch.targetX = indexTip.x;
+      screenTouch.targetY = 1 - indexTip.y;
+    }
     const spring = 14;
     const targetStrength = screenTouch.active ? 1 : 0;
     const strengthRate = screenTouch.active ? 8 : 2.5;
@@ -256,7 +310,22 @@ const createWebGLWarp = (): WebGLWarp => {
     screenTouch.x += screenTouch.vx * frameDelta;
     screenTouch.y += screenTouch.vy * frameDelta;
 
+    const dropletFollow = 0.35;
+    let dropletTargetX = screenTouch.active ? screenTouch.x : -1e5;
+    let dropletTargetY = screenTouch.active ? screenTouch.y : -1e5;
+    for (let index = 0; index < 8; index += 1) {
+      const positionIndex = index * 2;
+      const currentX = dropletPositions[positionIndex] ?? -1e5;
+      const currentY = dropletPositions[positionIndex + 1] ?? -1e5;
+      dropletPositions[positionIndex] = currentX + (dropletTargetX - currentX) * dropletFollow;
+      dropletPositions[positionIndex + 1] = currentY + (dropletTargetY - currentY) * dropletFollow;
+      dropletTargetX = dropletPositions[positionIndex] ?? dropletTargetX;
+      dropletTargetY = dropletPositions[positionIndex + 1] ?? dropletTargetY;
+    }
+
     const tipData = new Float32Array(20);
+    const dropletData = new Float32Array(8 * 2);
+    const dropletRadiusData = new Float32Array(8);
     const strengthData = new Float32Array(10);
     let visibleCount = 0;
     currentTips.forEach((tip, index) => {
@@ -271,6 +340,15 @@ const createWebGLWarp = (): WebGLWarp => {
       if (active) visibleCount += 1;
     });
     previousTips.splice(0, previousTips.length, ...currentTips);
+    dropletPositions.forEach((value, index) => {
+      dropletData[index] = value;
+    });
+    const dropletRadius = 42 / Math.max(Math.min(warpCanvas.clientWidth, warpCanvas.clientHeight), 1);
+    let currentRadius = dropletRadius;
+    dropletRadiusData.forEach((_value, index) => {
+      dropletRadiusData[index] = currentRadius;
+      currentRadius *= 0.85;
+    });
     gl.canvas.width = warpCanvas.clientWidth * window.devicePixelRatio;
     gl.canvas.height = warpCanvas.clientHeight * window.devicePixelRatio;
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
@@ -305,6 +383,14 @@ const createWebGLWarp = (): WebGLWarp => {
     gl.uniform1f(gridMaxShiftUniform, gridMaxShift);
     gl.uniform1f(gridLines, 0.0);
     gl.uniform3f(gridColor, 1, 1, 1);
+    gl.uniform2fv(droplets, dropletData);
+    gl.uniform1fv(dropletRadii, dropletRadiusData);
+    gl.uniform1i(dropletCount, 8);
+    gl.uniform1f(dropletStrength, screenTouch.strength);
+    gl.uniform1f(enablePose, effectSettings.pose ? 1 : 0);
+    gl.uniform1f(enableCloth, effectSettings.cloth ? 1 : 0);
+    gl.uniform1f(enableGrid, effectSettings.grid ? 1 : 0);
+    gl.uniform1f(enableDroplet, effectSettings.droplet ? 1 : 0);
     gl.uniform2f(clothTouch, screenTouch.x, screenTouch.y);
     gl.uniform2f(clothVelocity, screenTouch.vx, screenTouch.vy);
     gl.uniform1f(clothStrength, screenTouch.strength);
@@ -320,29 +406,9 @@ const resizeCanvas = (): void => {
   warpCanvas.height = Math.round(bounds.height * pixelRatio);
 };
 
-const updateScreenTouch = (event: PointerEvent): void => {
-  const bounds = warpCanvas.getBoundingClientRect();
-  const x = 1 - (event.clientX - bounds.left) / Math.max(bounds.width, 1);
-  const y = 1 - (event.clientY - bounds.top) / Math.max(bounds.height, 1);
-  screenTouch.targetX = Math.min(1, Math.max(0, x));
-  screenTouch.targetY = Math.min(1, Math.max(0, y));
-  screenTouch.active = true;
-};
-
-const releaseScreenTouch = (): void => {
-  screenTouch.active = false;
-  screenTouch.targetX = -1e5;
-  screenTouch.targetY = -1e5;
-};
-
 const run = async (): Promise<void> => {
   resizeCanvas();
   window.addEventListener("resize", resizeCanvas);
-  warpCanvas.addEventListener("pointerdown", updateScreenTouch);
-  warpCanvas.addEventListener("pointermove", updateScreenTouch);
-  warpCanvas.addEventListener("pointerup", releaseScreenTouch);
-  warpCanvas.addEventListener("pointercancel", releaseScreenTouch);
-  warpCanvas.addEventListener("pointerleave", releaseScreenTouch);
   const stream = await navigator.mediaDevices.getUserMedia({
     video: {
       facingMode: "user",
@@ -376,8 +442,9 @@ const run = async (): Promise<void> => {
     poseLandmarker.detectForVideo(video, timestamp);
     const handResult = handLandmarker.detectForVideo(video, timestamp);
     faceLandmarker.detectForVideo(video, timestamp);
-    const fingertips = collectFingertips(handResult.landmarks);
-    renderWarp(fingertips, timestamp);
+    const indexTip = handResult.landmarks[0]?.[8];
+    const trackedTips = indexTip === undefined ? [] : [indexTip];
+    renderWarp(trackedTips, indexTip, timestamp);
     requestAnimationFrame(render);
   };
 

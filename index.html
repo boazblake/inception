@@ -9,6 +9,14 @@
     <main class="stage">
       <video id="video" autoplay muted playsinline></video>
       <canvas id="warp-canvas" aria-label="Warped camera canvas"></canvas>
+      <aside class="effects-panel" aria-label="Touch effects">
+        <p class="effects-panel__eyebrow">Touch effects</p>
+        <h1>Mix the field</h1>
+        <label><input type="checkbox" data-effect="pose" checked /> Pose distortion</label>
+        <label><input type="checkbox" data-effect="cloth" checked /> Cloth brush</label>
+        <label><input type="checkbox" data-effect="grid" checked /> Warp grid</label>
+        <label><input type="checkbox" data-effect="droplet" /> Droplet cursor</label>
+      </aside>
     </main>
     <script type="module" src="/src/app.ts"></script>
   </body>
