@@ -10,7 +10,8 @@ type Point = Readonly<{ x: number; y: number; z?: number }>;
 
 const video = document.querySelector<HTMLVideoElement>("#video");
 const warpCanvas = document.querySelector<HTMLCanvasElement>("#warp-canvas");
-if (video === null || warpCanvas === null) {
+const driftCanvas = document.querySelector<HTMLCanvasElement>("#drift-canvas");
+if (video === null || warpCanvas === null || driftCanvas === null) {
   throw new Error("Pose stage elements are missing");
 }
 
@@ -54,29 +55,129 @@ const screenTouch: TouchState = {
 let trackingInitialized = false;
 
 const effectSettings = {
-  pose: true,
-  cloth: true,
+  pose: false,
+  cloth: false,
   grid: true,
   droplet: false,
+  drift: true,
 };
 const dropletPositions = new Float32Array(16).fill(-1e5);
 let previousFrameTime = 0;
 
+const driftContext = driftCanvas.getContext("2d");
+const scatterValue = (index: number, salt: number): number => {
+  const value = Math.sin(index * 12.9898 + salt * 78.233) * 43758.5453;
+  return value - Math.floor(value);
+};
+const driftParticles = Array.from({ length: 9 }, (_, index) => ({
+  x: scatterValue(index, 1),
+  y: scatterValue(index, 2),
+  speed: 0.000012 + scatterValue(index, 3) * 0.000014,
+  size: (1 + scatterValue(index, 4) * 1.5) * 10,
+  brightness: 0.7 + scatterValue(index, 5) * 0.6,
+  ray: scatterValue(index, 6),
+  angle: scatterValue(index, 7) * Math.PI,
+  rotationSpeed: (scatterValue(index, 9) * 2 - 1) * 0.00065,
+  phase: scatterValue(index, 8) * Math.PI * 2,
+}));
+let driftFrame = 0;
+let driftLastTime = 0;
+
+const resizeDriftCanvas = (): void => {
+  const bounds = driftCanvas.getBoundingClientRect();
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  driftCanvas.width = Math.max(1, Math.round(bounds.width * pixelRatio));
+  driftCanvas.height = Math.max(1, Math.round(bounds.height * pixelRatio));
+};
+
+const renderDriftField = (timestamp: number): void => {
+  if (driftContext === null) return;
+  const delta = driftLastTime === 0 ? 16 : Math.min(timestamp - driftLastTime, 50);
+  driftLastTime = timestamp;
+  const width = driftCanvas.clientWidth;
+  const height = driftCanvas.clientHeight;
+  const pixelRatio = driftCanvas.width / Math.max(width, 1);
+  driftContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  driftContext.clearRect(0, 0, width, height);
+  driftContext.globalCompositeOperation = "screen";
+  driftParticles.forEach((particle) => {
+    particle.x = (particle.x + particle.speed * delta) % 1;
+    particle.y = (particle.y + particle.speed * 0.63 * delta) % 1;
+    const x = particle.x * width;
+    const y = particle.y * height;
+    const pulse = 0.72 + 0.28 * Math.sin(timestamp * 0.0017 + particle.phase);
+    const alpha = particle.brightness * pulse;
+    const glowRadius = particle.size * (1.9 + particle.brightness * 0.9);
+    const glow = driftContext.createRadialGradient(x, y, 0, x, y, glowRadius);
+    glow.addColorStop(0, `rgba(255, 255, 255, ${0.62 * alpha})`);
+    glow.addColorStop(0.12, `rgba(239, 244, 255, ${0.22 * alpha})`);
+    glow.addColorStop(0.42, `rgba(210, 221, 255, ${0.035 * alpha})`);
+    glow.addColorStop(1, "rgba(196, 181, 253, 0)");
+    driftContext.fillStyle = glow;
+    driftContext.beginPath();
+    driftContext.arc(x, y, glowRadius, 0, Math.PI * 2);
+    driftContext.fill();
+
+    driftContext.fillStyle = `rgba(255, 255, 255, ${Math.min(1, 0.92 * alpha)})`;
+    driftContext.beginPath();
+    driftContext.arc(x, y, Math.max(1.1, particle.size * 0.16), 0, Math.PI * 2);
+    driftContext.fill();
+
+    if (particle.ray > 0.72) {
+      const rayLength = particle.size * (1.2 + particle.ray * 2.6);
+      const angle = particle.angle + timestamp * particle.rotationSpeed;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      driftContext.strokeStyle = `rgba(245, 248, 255, ${0.18 * alpha})`;
+      driftContext.lineWidth = 0.5 + particle.brightness * 0.4;
+      driftContext.beginPath();
+      driftContext.moveTo(x - cos * rayLength, y - sin * rayLength);
+      driftContext.lineTo(x + cos * rayLength, y + sin * rayLength);
+      driftContext.moveTo(x + sin * rayLength * 0.55, y - cos * rayLength * 0.55);
+      driftContext.lineTo(x - sin * rayLength * 0.55, y + cos * rayLength * 0.55);
+      driftContext.stroke();
+    }
+  });
+  driftContext.globalCompositeOperation = "source-over";
+  driftContext.globalAlpha = 1;
+  if (effectSettings.drift) driftFrame = requestAnimationFrame(renderDriftField);
+};
+
+const syncDriftField = (): void => {
+  resizeDriftCanvas();
+  if (effectSettings.drift && driftFrame === 0) {
+    driftLastTime = 0;
+    driftFrame = requestAnimationFrame(renderDriftField);
+  } else if (!effectSettings.drift && driftFrame !== 0) {
+    cancelAnimationFrame(driftFrame);
+    driftFrame = 0;
+    driftContext?.clearRect(0, 0, driftCanvas.width, driftCanvas.height);
+  }
+};
+
+window.addEventListener("resize", syncDriftField);
+syncDriftField();
 const effectInputs = document.querySelectorAll<HTMLInputElement>("[data-effect]");
 effectInputs.forEach((input) => {
   const effect = input.dataset.effect as keyof typeof effectSettings | undefined;
   if (effect === undefined) return;
   input.addEventListener("change", () => {
     effectSettings[effect] = input.checked;
+    if (effect === "drift") syncDriftField();
   });
 });
 
 const stage = document.querySelector<HTMLElement>(".stage");
-const menuToggle = document.querySelector<HTMLButtonElement>(".menu-toggle");
-menuToggle?.addEventListener("click", () => {
-  if (stage === null || menuToggle === null) return;
-  const open = stage.classList.toggle("menu-open");
-  menuToggle.setAttribute("aria-expanded", String(open));
+const secretTrigger = document.querySelector<HTMLButtonElement>(".secret-trigger");
+let secretTapCount = 0;
+let lastSecretTap = 0;
+secretTrigger?.addEventListener("click", () => {
+  const now = performance.now();
+  secretTapCount = now - lastSecretTap <= 1200 ? secretTapCount + 1 : 1;
+  lastSecretTap = now;
+  if (secretTapCount < 5 || stage === null) return;
+  stage.classList.toggle("menu-open");
+  secretTapCount = 0;
 });
 
 const createWarpGridField = (cols: number, rows: number): WarpGridField => ({

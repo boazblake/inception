@@ -9,14 +9,16 @@
     <main class="stage">
       <video id="video" autoplay muted playsinline></video>
       <canvas id="warp-canvas" aria-label="Warped camera canvas"></canvas>
-      <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="effects-panel">Effects</button>
+      <canvas id="drift-canvas" aria-hidden="true"></canvas>
+      <button class="secret-trigger" type="button" aria-label="" tabindex="-1"></button>
       <aside id="effects-panel" class="effects-panel" aria-label="Touch effects">
         <p class="effects-panel__eyebrow">Touch effects</p>
         <h1>Mix the field</h1>
-        <label><input type="checkbox" data-effect="pose" checked /> Pose distortion</label>
-        <label><input type="checkbox" data-effect="cloth" checked /> Cloth brush</label>
+        <label><input type="checkbox" data-effect="pose" /> Pose distortion</label>
+        <label><input type="checkbox" data-effect="cloth" /> Cloth brush</label>
         <label><input type="checkbox" data-effect="grid" checked /> Warp grid</label>
         <label><input type="checkbox" data-effect="droplet" /> Droplet cursor</label>
+        <label><input type="checkbox" data-effect="drift" checked /> Drift field</label>
       </aside>
     </main>
     <script type="module" src="/src/app.ts"></script>
